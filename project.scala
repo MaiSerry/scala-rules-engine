@@ -8,14 +8,15 @@ import java.time.temporal.ChronoUnit
 object project {
 
   case class Order(
-                        timestamp: Instant,
-                        productName: String,
-                        expiryDate: LocalDate,
-                        quantity: Int,
-                        unitPrice: Double,
-                        channel: String,
-                        paymentMethod: String
+                    timestamp: Instant,
+                    productName: String,
+                    expiryDate: LocalDate,
+                    quantity: Int,
+                    unitPrice: Double,
+                    channel: String,
+                    paymentMethod: String
                   )
+
   case class ProcessedOrder(
                              order: Order,
                              discount: Double,
@@ -53,7 +54,7 @@ object project {
       .drop(1)
       .flatMap(parseLine)
 
-/*  val orderFile = "src/main/resources/orders.csv"
+  /*  val orderFile = "src/main/resources/orders.csv"
   val orders: Try[List[Order]] =
     readFile(orderFile).map(parseOrders)
 */
@@ -70,9 +71,17 @@ object project {
     date.getMonthValue == 3 && date.getDayOfMonth == 23
   }
 
-def QuanitiymoreThan5(o:Order):Boolean= o.quantity>5
+  def QuanitiymoreThan5(o: Order): Boolean = o.quantity > 5
 
-// discount engine
+  def isApp(o: Order): Boolean = o.channel.toLowerCase == "app"
+  def isVisa(o:Order):Boolean=o.paymentMethod.toLowerCase=="visa"
+  // discount engine
+  def VisaDiscount(o:Order):Double=0.05
+  def AppDiscount(o: Order): Double = {
+    Math.ceil(o.quantity / 5.0).toInt * 0.05
+  }
+
+
   def expiryDiscount(o: Order): Double = {
     val days = ChronoUnit.DAYS.between(
       o.timestamp.atZone(ZoneOffset.UTC).toLocalDate, o.expiryDate )
@@ -101,9 +110,11 @@ def QuanitiymoreThan5(o:Order):Boolean= o.quantity>5
   def getDiscountRules(): List[DiscountRule] =
     List(
       (iswillExpire,  expiryDiscount),
-      (isWineOrCheese,   cheeseOrWineDiscount),
-      ( inMonthSale,      march23Discount),
-      (QuanitiymoreThan5,      morequantityDiscount)
+      (isWineOrCheese, cheeseOrWineDiscount),
+      (inMonthSale,  march23Discount),
+      (QuanitiymoreThan5, morequantityDiscount),
+      (isVisa,  VisaDiscount),
+      (isApp,  AppDiscount)
     )
 
 //apply rules to get discount of order
