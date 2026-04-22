@@ -1,5 +1,5 @@
 package Project
-
+import scala.collection.parallel.CollectionConverters._
 import scala.io.{Codec, Source}
 import scala.util.{Try, Using}
 import java.time.{Instant,LocalDate,ZoneOffset}
@@ -133,7 +133,15 @@ object project {
   }
   //  process all orders
 
-  def processOrders(orders: Iterator[Order]): Iterator[ProcessedOrder] = orders.map(applyDiscount(getDiscountRules()))
+  def processOrders(orders: Iterator[Order]): Iterator[ProcessedOrder] =
+    orders
+      .grouped(50000)           // chunk 50000 at a time
+      .flatMap { chunk =>
+        chunk.par               // parallel across CPU cores
+          .map(applyDiscount(getDiscountRules()))
+          .toList               // back to sequential for DB
+          .iterator
+      }
 
 }
 import java.sql.{ DriverManager, PreparedStatement}
@@ -151,9 +159,9 @@ object Database {
       |  discount       REAL,
       |  final_price    REAL
       |)""".stripMargin
-
+//upsert
   val insertSql =
-    """INSERT OR REPLACE INTO processed_orders VALUES
+    """INSERT or Replace INTO processed_orders VALUES
       |(?,?,?,?)""".stripMargin
 
   def bindOrder(stmt: PreparedStatement, p: ProcessedOrder): Unit = {
@@ -164,22 +172,6 @@ object Database {
   }
 
   // Side effect isolated: writes all processed orders to DB
-//  def writeOrders(orders: Iterator[ProcessedOrder]): Try[Int] =
-//    Try {
-//      Using.resource(DriverManager.getConnection(url)) {
-//        conn => conn.setAutoCommit(false)
-//          conn.createStatement().execute(createSql)
-//        val stmt = conn.prepareStatement(insertSql)
-//          val count = orders
-//            .map { p =>
-//              bindOrder(stmt, p)
-//              stmt.executeUpdate()   // returns 1 if inserted, 0 if not
-//            }
-//            .sum
-//          conn.commit()
-//          count
-//      }
-//    }
 
   def writeOrders(orders: Iterator[ProcessedOrder]): Try[Int] =
     Try {
@@ -189,13 +181,13 @@ object Database {
         val stmt = conn.prepareStatement(insertSql)
 
         val count = orders
-          .grouped(50000) // chunk of 40000
+          .grouped(50000) // chunk of 50000
           .map { chunk =>
             chunk.foreach { p =>
               bindOrder(stmt, p)
               stmt.addBatch() // add to batch — no disk hit
             }
-            val inserted = stmt.executeBatch().sum // one disk hit per 40000
+            val inserted = stmt.executeBatch().sum // one disk hit per 50000
             stmt.clearBatch()
             inserted
           }
