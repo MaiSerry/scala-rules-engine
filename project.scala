@@ -4,9 +4,8 @@ import scala.io.{Codec, Source}
 import scala.util.{Try, Using}
 import java.time.{Instant,LocalDate,ZoneOffset}
 import java.time.temporal.ChronoUnit
-
 object project {
-
+/// modeling
   case class Order(
                     timestamp: Instant,
                     productName: String,
@@ -22,16 +21,13 @@ object project {
                              discount: Double,
                              finalPrice: Double
                            )
-
-  def readFile(fileName: String, codec: String = Codec.default.toString): Try[List[String]] = {
-    Using(Source.fromFile(fileName, codec)) { source =>
-      source.getLines().toList
-    }
+//readfile
+  def readFile(fileName: String, codec: String = Codec.default.toString): Try[Iterator[String]] = {
+    Try(Source.fromFile(fileName).getLines())
   }
 
   // parse one CSV line
   def parseLine(line: String): Option[Order] = {
-
     val columns = line.split(",").toList
     // only proceed if we have exactly 7 columns
     if (columns.length != 7)
@@ -45,19 +41,18 @@ object project {
         unitPrice = columns(4).toDouble,
         channel = columns(5),
         paymentMethod = columns(6)
-      )).toOption // if ANY parse fails (bad date, bad number) → None
+      )).toOption // if any parse fails (bad date, bad number) > none
   }
 
   // list of lines get list of orders with parsed
-  def parseOrders(lines: List[String]): List[Order] =
+  // doesn't load all in memory
+
+  def parseOrders(lines: Iterator[String]): Iterator[Order] =
     lines
       .drop(1)
       .flatMap(parseLine)
 
-  /*  val orderFile = "src/main/resources/orders.csv"
-  val orders: Try[List[Order]] =
-    readFile(orderFile).map(parseOrders)
-*/
+
   // Qualifying Rules
   def iswillExpire(o: Order): Boolean = {
     val remainingdays = ChronoUnit.DAYS.between(o.timestamp.atZone(ZoneOffset.UTC).toLocalDate, o.expiryDate)
@@ -65,22 +60,24 @@ object project {
   }
 
   def isWineOrCheese(o: Order): Boolean = o.productName.toLowerCase.contains("wine") || o.productName.toLowerCase.contains("cheese")
-
+//23march sales
   def inMonthSale(o: Order): Boolean = {
     val date = o.timestamp.atZone(java.time.ZoneOffset.UTC).toLocalDate
     date.getMonthValue == 3 && date.getDayOfMonth == 23
   }
-
+//quantity more than 5
   def QuanitiymoreThan5(o: Order): Boolean = o.quantity > 5
-
+//sales on App
   def isApp(o: Order): Boolean = o.channel.toLowerCase == "app"
+  //sales by visa
   def isVisa(o:Order):Boolean=o.paymentMethod.toLowerCase=="visa"
+
   // discount engine
   def VisaDiscount(o:Order):Double=0.05
+
   def AppDiscount(o: Order): Double = {
     Math.ceil(o.quantity / 5.0).toInt * 0.05
   }
-
 
   def expiryDiscount(o: Order): Double = {
     val days = ChronoUnit.DAYS.between(
@@ -107,8 +104,8 @@ object project {
     }
   type DiscountRule = (Order => Boolean, Order => Double)
   // made list od tuple of (qulier,discount)
-  def getDiscountRules(): List[DiscountRule] =
-    List(
+  def getDiscountRules(): Vector[DiscountRule] =
+    Vector(
       (iswillExpire,  expiryDiscount),
       (isWineOrCheese, cheeseOrWineDiscount),
       (inMonthSale,  march23Discount),
@@ -118,7 +115,7 @@ object project {
     )
 
 //apply rules to get discount of order
-  def applyDiscount(rules: List[DiscountRule])(order: Order): ProcessedOrder = {
+  def applyDiscount(rules: Vector[DiscountRule])(order: Order): ProcessedOrder = {
     val topTwo =
       rules
         .filter(rule => rule._1(order)) //qualifRule
@@ -127,15 +124,16 @@ object project {
         .take(2)
 
     val discount =
-      if (topTwo.isEmpty) 0.0                        // no rules matched → 0%
-      else topTwo.sum / topTwo.size                  // average of top 2
+      if (topTwo.isEmpty) 0.0 // no rules matched → 0%
+      else topTwo.sum / topTwo.size // average of top 2
 
     val finalPrice = order.unitPrice * order.quantity * (1 - discount)
 
     ProcessedOrder(order, discount ,finalPrice)
   }
   //  process all orders
-  def processOrders(orders: List[Order]): List[ProcessedOrder] = orders.map(applyDiscount(getDiscountRules()))
+
+  def processOrders(orders: Iterator[Order]): Iterator[ProcessedOrder] = orders.map(applyDiscount(getDiscountRules()))
 
 }
 import java.sql.{ DriverManager, PreparedStatement}
@@ -150,44 +148,65 @@ object Database {
     """CREATE TABLE IF NOT EXISTS processed_orders (
       |  timestamp      TEXT,
       |  product_name   TEXT,
-      |  expiry_date    TEXT,
-      |  quantity       INTEGER,
-      |  unit_price     REAL,
-      |  channel        TEXT,
-      |  payment_method TEXT,
       |  discount       REAL,
       |  final_price    REAL
       |)""".stripMargin
 
   val insertSql =
-    """INSERT INTO processed_orders VALUES
-      |(?,?,?,?,?,?,?,?,?)""".stripMargin
+    """INSERT OR REPLACE INTO processed_orders VALUES
+      |(?,?,?,?)""".stripMargin
 
-  // binds one ProcessedOrder to a prepared statement
   def bindOrder(stmt: PreparedStatement, p: ProcessedOrder): Unit = {
-    stmt.setString (1, p.order.timestamp.toString)
-    stmt.setString (2, p.order.productName)
-    stmt.setString (3, p.order.expiryDate.toString)
-    stmt.setInt    (4, p.order.quantity)
-    stmt.setDouble (5, p.order.unitPrice)
-    stmt.setString (6, p.order.channel)
-    stmt.setString (7, p.order.paymentMethod)
-    stmt.setDouble (8, p.discount)
-    stmt.setDouble (9, p.finalPrice)
+    stmt.setString(1, p.order.timestamp.toString)
+    stmt.setString(2, p.order.productName)
+    stmt.setDouble(3, p.discount)
+    stmt.setDouble(4, p.finalPrice)
   }
 
   // Side effect isolated: writes all processed orders to DB
-  def writeOrders(orders: List[ProcessedOrder]): Try[Unit] =
+//  def writeOrders(orders: Iterator[ProcessedOrder]): Try[Int] =
+//    Try {
+//      Using.resource(DriverManager.getConnection(url)) {
+//        conn => conn.setAutoCommit(false)
+//          conn.createStatement().execute(createSql)
+//        val stmt = conn.prepareStatement(insertSql)
+//          val count = orders
+//            .map { p =>
+//              bindOrder(stmt, p)
+//              stmt.executeUpdate()   // returns 1 if inserted, 0 if not
+//            }
+//            .sum
+//          conn.commit()
+//          count
+//      }
+//    }
+
+  def writeOrders(orders: Iterator[ProcessedOrder]): Try[Int] =
     Try {
-      Using.resource(DriverManager.getConnection(url)) {
-        conn => conn.createStatement().execute(createSql)
+      Using.resource(DriverManager.getConnection(url)) { conn =>
+        conn.setAutoCommit(false)
+        conn.createStatement().execute(createSql)
         val stmt = conn.prepareStatement(insertSql)
-        orders.foreach { p => bindOrder(stmt, p)
-          stmt.addBatch() }
-        stmt.executeBatch()
+
+        val count = orders
+          .grouped(50000) // chunk of 40000
+          .map { chunk =>
+            chunk.foreach { p =>
+              bindOrder(stmt, p)
+              stmt.addBatch() // add to batch — no disk hit
+            }
+            val inserted = stmt.executeBatch().sum // one disk hit per 40000
+            stmt.clearBatch()
+            inserted
+          }
+          .sum
+
+        conn.commit()
+        count
       }
+
     }
-}
+    }
 import java.io.{BufferedWriter,FileWriter}
 
 object Logger {
@@ -212,7 +231,6 @@ object Logger {
       writer.flush()
       writer.close()
     }
-
 }
 
 
@@ -221,30 +239,42 @@ import scala.util.{Success,Failure}
 
 object Main extends App {
 
-  val orderFile = "src/main/resources/orders.csv"
+  val orderFile = "src/main/resources/TRX10M.csv"
 
-  val result = for {
-    _         <- Logger.log(Logger.INFO,  "Engine started")
-    lines     <- readFile(orderFile)
-    _         <- Logger.log(Logger.INFO,  s"Read ${lines.size} lines from $orderFile")
-    orders     = parseOrders(lines)
-    _         <- Logger.log(Logger.INFO,  s"Parsed ${orders.size} orders")
-    processed  = processOrders(orders)
-    _         <- Logger.log(Logger.INFO,  s"Discounts calculated for ${processed.size} orders")
-    _         <- Database.writeOrders(processed)
-    _         <- Logger.log(Logger.INFO,  "Orders written to database successfully")
-  } yield processed
-
-  result match {
-    case Success(orders) => Logger.log(Logger.INFO, "Engine finished successfully")
-      Logger.closeLog()
-      orders.foreach { p => println(f"${p.order.productName}%-35s | discount: ${p.discount * 100}%5.1f%% | final: ${p.finalPrice}%8.2f") }
-    case Failure(ex) => Logger.log(Logger.ERROR, s"Engine failed: ${ex.getMessage}")
-     Logger.closeLog()
-      println(s"Error: ${ex.getMessage}")
+  def measureTime[A](label: String)(block: => A): A = {
+    val start  = System.currentTimeMillis()
+    val result = block
+    val end    = System.currentTimeMillis()
+    println(f"⏱  $label%-40s ${end - start} ms")
+    result
   }
 
+  val result = measureTime("Total engine time") {
+    for {
+      _         <- Logger.log(Logger.INFO,  "Engine started")
+      lines     <- measureTime("Read file")       { readFile(orderFile) }
+      _         <- Logger.log(Logger.INFO,  "File read successfully")
+      orders     = measureTime("Parse orders")    { parseOrders(lines) }
+      _         <- Logger.log(Logger.INFO,  "Orders parsing pipeline ready")
+      processed  = measureTime("Apply discounts") { processOrders(orders) }
+      _         <- Logger.log(Logger.INFO,  "Discount rules pipeline ready")
+      _         <- Logger.log(Logger.INFO,  "Starting database write...")
+      count     <- measureTime("Insert into DB")  { Database.writeOrders(processed) }
+      _         <- Logger.log(Logger.INFO,  s"$count orders written to database successfully")
+    } yield count
+  }
 
+  result match {
+    case Success(count) =>
+      Logger.log(Logger.INFO, s"Engine finished successfully — $count orders processed")
+      Logger.closeLog()
+      println(s"Done — $count orders processed successfully")
+
+    case Failure(ex) =>
+      Logger.log(Logger.ERROR, s"Engine failed: ${ex.getMessage}")
+      Logger.closeLog()
+      println(s"Error: ${ex.getMessage}")
+  }
 
 }
 
