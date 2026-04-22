@@ -129,20 +129,38 @@ The project adheres to strict functional programming principles:
 
 ## How to Run
 
-To run the Scala Rules Engine:
-
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/MaiSerry/scala-rules-engine.git
-    cd scala-rules-engine
-    ```
-2.  **Ensure Scala environment is set up**.
-3.  **Place your order data**: The `Main` object expects an `TRX10M.csv` file in `src/main/resources/`.
-4.  **Compile and Run**:
-    ```bash
-    scala project.scala
-    ```
-    (Note: Depending on your Scala setup, you might need to compile with `scalac` first or use an sbt project structure if available.)
-
-After execution, processed orders will be stored in `orders.db` and logs in `rules_engine.log`.
-
+## 🛠️ Setup & Run
+ 
+### Prerequisites
+ 
+- Scala 2.13+
+- SBT
+- Java 11+
+### Dependencies — `build.sbt`
+ 
+```scala
+libraryDependencies ++= Seq(
+  "org.xerial"             %  "sqlite-jdbc"                 % "3.43.0.0",
+  "org.scala-lang.modules" %% "scala-parallel-collections"  % "1.0.4"
+)
+```
+ 
+### Steps
+ 
+```bash
+# 1. clone
+git clone https://github.com/Mirmed/retail-discount-engine-scala.git
+cd retail-discount-engine-scala
+ 
+# 2. place your CSV file
+ 
+# 3. run
+sbt run
+```
+ 
+### Output files
+ 
+```
+orders.db          ← processed results in SQLite
+rules_engine.log   ← all engine events
+```
